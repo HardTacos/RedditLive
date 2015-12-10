@@ -64,7 +64,9 @@ def create_database():
             redditUserName VARCHAR(50) NOT NULL,
             twitchUserName VARCHAR(50) NOT NULL,
             console VARCHAR(5) NULL,
-            onlineStatus int NOT NULL
+            onlineStatus int NOT NULL,
+            streamTitle VARCHAR(255) NULL,
+            streamViewers int NULL
         )"""
     
     cursor.execute(q)
@@ -102,7 +104,7 @@ def check_for_new_users():
             else:
                 # Enter new user into table
                 cmd = "INSERT INTO " + DB_TABLE + " (redditUserName, twitchUserName, console, onlineStatus) VALUES (%s, %s, %s, %s)"
-                cursor.execute(cmd, [username, twitchUserName, console, 0])
+                cursor.execute(cmd, [username, twitchUserName, console, 1])
                 print currentTime + ' - Inserted new record into table: ' + username + ' | ' + twitchUserName + ' | ' + console
             
             db.commit()
@@ -110,7 +112,7 @@ def check_for_new_users():
 # -----------------------------
 # --- check if user is online
 # -----------------------------
-def check_user_status(user):
+def check_user_status(info):
     """ 
     returns =
         0: online
@@ -118,9 +120,8 @@ def check_user_status(user):
         2: not found
         3: error 
     """
-    url = 'https://api.twitch.tv/kraken/streams/' + user
+    
     try:
-        info = json.loads(urlopen(url, timeout = 15).read().decode('utf-8'))
         if info['stream'] == None:
             status = 1
         else:
@@ -131,7 +132,27 @@ def check_user_status(user):
         else:
             status = 3
     return status
-  
+
+# ------------------------
+# --- get user view count
+# ------------------------
+def user_view_count(info):
+    try:
+        viewers = info['stream']['viewers']
+    except URLError as e:
+        viewers = 0
+    return viewers
+
+# ----------------------
+# --- get stream title
+# ----------------------
+def user_stream_title(info):
+    try:
+        title = info['stream']['channel']['status']
+    except URLError as e:
+        title = "Title Error..."
+    return title
+    
 # -------------------------------------------------------------------------
 # --- get user from table and check status - update table based on status
 # -------------------------------------------------------------------------
@@ -150,15 +171,34 @@ def get_user():
         
         username = row[1]
         twitchUserName = row[2]
-        status = check_user_status(row[2])
+        onlineStatus = row[4]
+        streamTitle = row[5]
+        streamViewers = row[6]
         
-        if (status != row[4]):
-            cmd = "UPDATE " + DB_TABLE + " set onlineStatus='%s' WHERE twitchUserName='" + twitchUserName + "'"
-            cursor.execute(cmd, [status])
-            print currentTime + ' - ONLINE STATUS CHANGE FOR [ ' + username + ' ] - STATUS: [ ' + str(status) + ' ]'
+        url = 'https://api.twitch.tv/kraken/streams/' + twitchUserName
+        try:
+            info = json.loads(urlopen(url, timeout = 15).read().decode('utf-8'))
+            status = check_user_status(info)
+            if (status == 0):
+                viewers = user_view_count(info)
+                title = user_stream_title(info)
+            else:
+                viewers = 0
+                title = ""
+        except URLError as e:
+            status = 3
+            title = ""
+            viewers = 0
+        
+        #print("status: " + str(status) + " | viewers: " + str(viewers) + " | title: " + title)
+        
+
+        if (status != onlineStatus or viewers != streamViewers or title != streamTitle):
+            cmd = "UPDATE " + DB_TABLE + " set onlineStatus='%s', streamTitle=%s, streamViewers='%s' WHERE twitchUserName='" + twitchUserName + "'"
+            cursor.execute(cmd, [status, title, viewers])
+            print currentTime + ' - ONLINE STATUS CHANGE FOR [ ' + username + ' ] - STATUS: [ ' + str(status) + ' ] - TITLE: [ ' + title + ' ] - VIEWERS: [ ' + str(viewers) + ' ] - '
             
         db.commit()
-
 # =============================================================================
 # MAIN
 # =============================================================================
@@ -167,11 +207,13 @@ def main():
     reddit.login(USER, PASS)
     db = MySQLdb.connect(DB_HOST, DB_USER, DB_PASS, DB_NAME )
     
-    print "start"
+    print "====================================================================="
+    print "====================================================================="
+    print "====================================================================="
     while True:
         try:
             get_user()
-            time.sleep(60)
+            time.sleep(30)
         except Exception as err:
            print  'There was an error in main(): '
            print err
